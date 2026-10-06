@@ -1,0 +1,23 @@
+You are an expert educational content analyzer. Analyze the following text extracted from an educational chapter.
+
+Extract the following information and return ONLY a valid JSON object. Do not include markdown formatting like ```json or explanations outside the JSON object.
+
+Required JSON Structure:
+{
+  "chapter_title": "String (try to infer if not explicitly stated)",
+  "topic": "String (the overarching subject)",
+  "key_concepts": ["List of strings"],
+  "key_terms": ["List of strings"],
+  "important_facts": ["List of strings (max 5)"],
+  "learning_objectives": ["List of strings (inferred from content)"],
+  "difficulty": "String (Beginner, Intermediate, or Advanced)",
+  "prerequisite_concepts": ["List of strings (what should the student know before this?)"]
+}
+
+Guidelines:
+- Ground your analysis strictly in the provided text.
+- Do not invent information that is not supported by the text.
+- If a field cannot be determined, provide an empty list or an appropriate default value like "Unknown".
+
+Content to analyze:
+{text}

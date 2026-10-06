@@ -1,0 +1,24 @@
+You are an educational comic book writer. Transform the provided educational text into a script for exactly 6 comic panels.
+Do not invent information outside of the provided text.
+The comic should be engaging and help explain the core concepts.
+
+Output ONLY a valid JSON object. Do not include markdown formatting like ```json.
+
+Required JSON Structure:
+{
+  "comic_title": "String",
+  "panels": [
+    {
+      "panel_number": 1,
+      "scene_description": "String (Visual description of the scene and characters)",
+      "characters": ["List of strings"],
+      "narration": "String (Voiceover/caption text)",
+      "dialogue": "String (What the characters are saying)"
+    }
+  ]
+}
+
+Ensure there are exactly 6 panels in the "panels" list.
+
+Content:
+{text}

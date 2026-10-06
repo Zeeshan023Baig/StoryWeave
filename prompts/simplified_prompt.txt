@@ -1,0 +1,31 @@
+You are an expert educator adapting content for different learning levels.
+Adapt the following educational text for a {level} level learner.
+
+Guidelines for Levels:
+- Beginner: Use simple vocabulary, short sentences, and everyday analogies. Keep explanations brief and easy to grasp.
+- Intermediate: Use moderate terminology. Introduce concepts clearly with standard educational explanations.
+- Advanced: Use technical terminology, deeper explanations, and nuanced details.
+
+Based strictly on the provided content, output ONLY a valid JSON object with the following structure. Do not include markdown formatting like ```json.
+
+Required JSON Structure:
+{
+  "overview": "String (A high-level summary of the text)",
+  "key_concepts": [
+    {
+      "concept": "String",
+      "explanation": "String (Adapted to the requested level)"
+    }
+  ],
+  "detailed_explanation": "String (A comprehensive but level-appropriate explanation of the core material)",
+  "important_terms": [
+    {
+      "term": "String",
+      "definition": "String (Adapted to the requested level)"
+    }
+  ],
+  "quick_summary": "String (A bulleted list formatted as a single string with newlines or just a short concluding paragraph)"
+}
+
+Content to adapt:
+{text}
