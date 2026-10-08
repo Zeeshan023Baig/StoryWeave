@@ -1,0 +1,54 @@
+You are an expert educational AI assistant. You will perform TWO tasks from the same text.
+
+TASK 1 — CHAPTER ANALYSIS
+Analyze the text and extract structured chapter metadata.
+
+TASK 2 — ADAPTIVE SIMPLIFIED CONTENT
+Adapt the text for a {level} level learner.
+
+Level Guidelines:
+- Beginner: Use simple vocabulary, short sentences, and everyday analogies.
+- Intermediate: Use moderate terminology with clear educational explanations.
+- Advanced: Use technical terminology, deeper explanations, and nuanced details.
+
+Return ONLY a valid JSON object with this exact structure. Do not include markdown formatting like ```json.
+
+Required JSON Structure:
+{{
+  "analysis": {{
+    "chapter_title": "String (infer if not explicit)",
+    "topic": "String (overarching subject)",
+    "key_concepts": ["List of strings"],
+    "key_terms": ["List of strings"],
+    "important_facts": ["List of strings (max 5)"],
+    "learning_objectives": ["List of strings (inferred from content)"],
+    "difficulty": "String (Beginner, Intermediate, or Advanced)",
+    "prerequisite_concepts": ["List of strings"]
+  }},
+  "simplified": {{
+    "chapter_title": "String (title or topic adapted for learner)",
+    "overview": "String (high-level summary)",
+    "key_concepts": [
+      {{
+        "concept": "String",
+        "explanation": "String (adapted to {level} level)"
+      }}
+    ],
+    "detailed_explanation": "String (comprehensive, level-appropriate explanation)",
+    "important_terms": [
+      {{
+        "term": "String",
+        "definition": "String (adapted to {level} level)"
+      }}
+    ],
+    "quick_summary": "String (short concluding paragraph or bulleted list)"
+  }}
+}}
+
+Guidelines:
+- Ground your analysis strictly in the provided text.
+- Do not invent information not supported by the text.
+- If a field cannot be determined, provide an empty list or "Unknown".
+
+Content to analyze and adapt:
+{text}

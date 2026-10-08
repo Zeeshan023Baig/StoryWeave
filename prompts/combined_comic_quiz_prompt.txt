@@ -1,0 +1,54 @@
+You are an expert educational content creator. You will perform TWO tasks from the same text.
+
+TASK 1 — COMIC SCRIPT
+Transform the text into an engaging educational comic with exactly 6 panels.
+For each panel, include:
+- panel_number: integer (1 to 6)
+- scene: setting and context
+- visual_description: detailed visual prompt for generating the illustration
+- characters: list of characters appearing
+- narration: voiceover/caption text
+- dialogue: what characters are saying
+
+TASK 2 — QUIZ
+Create exactly 5 Multiple Choice Questions (MCQs) based strictly on the text.
+Each question must have exactly 4 options, only 1 correct answer, and an explanation.
+
+Return ONLY a valid JSON object with this exact structure. Do not include markdown formatting like ```json.
+
+Required JSON Structure:
+{{
+  "comic": {{
+    "comic_title": "String",
+    "panels": [
+      {{
+        "panel_number": 1,
+        "scene": "String (setting and context)",
+        "visual_description": "String (detailed visual description of characters and environment for comic illustration)",
+        "characters": ["List of strings"],
+        "narration": "String (voiceover/caption text)",
+        "dialogue": "String (what the characters are saying)"
+      }}
+    ]
+  }},
+  "quiz": {{
+    "quiz_title": "String",
+    "questions": [
+      {{
+        "question": "String",
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "correct_answer": "String (must match one of the options exactly)",
+        "explanation": "String (why this is the correct answer)"
+      }}
+    ]
+  }}
+}}
+
+IMPORTANT:
+- The "panels" list must contain exactly 6 panels.
+- The "questions" list must contain exactly 5 questions.
+- Each question must have exactly 4 options.
+- Do not invent information outside of the provided text.
+
+Content:
+{text}

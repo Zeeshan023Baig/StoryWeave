@@ -2,3 +2,5 @@ streamlit
 PyMuPDF
 google-genai
 python-dotenv
+gTTS
+requests
