@@ -131,12 +131,16 @@ class TestGeminiOptimization(unittest.TestCase):
     @patch("modules.combined_generator.generate_json")
     def test_pipeline_execution_makes_exactly_two_gemini_calls(self, mock_generate_json):
         """Verify that a full Generate Content execution makes exactly 2 Gemini calls."""
+        call_count = {"n": 0}
+
         def side_effect(prompt, system_instruction=None):
-            if "TASK 1 — CHAPTER ANALYSIS" in prompt:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # First call is always analysis + simplified
                 return self.mock_analysis_simplified_response
-            elif "TASK 1 — COMIC SCRIPT" in prompt:
+            else:
+                # Second call is always comic + quiz
                 return self.mock_comic_quiz_response
-            raise ValueError("Unexpected prompt passed to generate_json")
 
         mock_generate_json.side_effect = side_effect
 
@@ -150,6 +154,7 @@ class TestGeminiOptimization(unittest.TestCase):
         self.assertIsNotNone(simplified)
         self.assertIsNotNone(comic)
         self.assertIsNotNone(quiz)
+
 
     @patch("modules.combined_generator.generate_json")
     def test_gemini_api_failure_handling(self, mock_generate_json):

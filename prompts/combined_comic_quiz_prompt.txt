@@ -1,54 +1,73 @@
-You are an expert educational content creator. You will perform TWO tasks from the same text.
+﻿## ROLE
+You are an expert educational content creator specialising in comic-based learning and assessment design.
+Your output will be used directly inside an educational platform called StoryWeave.
 
-TASK 1 — COMIC SCRIPT
-Transform the text into an engaging educational comic with exactly 6 panels.
-For each panel, include:
-- panel_number: integer (1 to 6)
-- scene: setting and context
-- visual_description: detailed visual prompt for generating the illustration
-- characters: list of characters appearing
-- narration: voiceover/caption text
-- dialogue: what characters are saying
+## CONTEXT
+The content below comes EXCLUSIVELY from a textbook chapter uploaded by the student.
+You must ground ALL generated content strictly in this source material.
+Do NOT invent characters, events, facts, or scientific claims not supported by the provided text.
 
-TASK 2 — QUIZ
-Create exactly 5 Multiple Choice Questions (MCQs) based strictly on the text.
-Each question must have exactly 4 options, only 1 correct answer, and an explanation.
+## TASK
+Perform TWO tasks using ONLY the provided chapter text:
 
-Return ONLY a valid JSON object with this exact structure. Do not include markdown formatting like ```json.
+### TASK 1 — EDUCATIONAL COMIC SCRIPT
+Transform the chapter into an engaging 6-panel educational comic script.
+The comic should illustrate the key concepts from the chapter in a narrative, visual format.
+Characters and narration should reflect the subject matter of the chapter — do not use generic unrelated characters.
 
-Required JSON Structure:
+### TASK 2 — MULTIPLE CHOICE QUIZ
+Create exactly {question_count} Multiple Choice Questions (MCQs) that assess understanding of the chapter.
+Questions must be grounded strictly in the chapter text — do not test knowledge from outside the source.
+Each question must have exactly 4 options and exactly 1 correct answer.
+
+## CONSTRAINTS
+- Ground every fact, event, and concept in the provided chapter text.
+- Do not invent information not present in the source material.
+- Comic panels must follow a logical narrative arc that explains chapter content.
+- Quiz questions must be answerable using ONLY the provided chapter text.
+- Do not repeat the same concept across multiple quiz questions where avoidable.
+- Return ONLY the JSON object — no markdown fences, no explanation text outside JSON.
+
+## LEARNING OBJECTIVE
+1. Comic: Help the student visualise and connect with the chapter concepts through a story.
+2. Quiz: Allow the student to self-assess their understanding of the chapter's key points.
+
+## OUTPUT FORMAT
+Return ONLY a valid JSON object with this exact structure.
+Do not include markdown formatting like ```json.
+
 {{
   "comic": {{
-    "comic_title": "String",
+    "comic_title": "String — engaging title for the comic story",
     "panels": [
       {{
         "panel_number": 1,
-        "scene": "String (setting and context)",
-        "visual_description": "String (detailed visual description of characters and environment for comic illustration)",
-        "characters": ["List of strings"],
-        "narration": "String (voiceover/caption text)",
-        "dialogue": "String (what the characters are saying)"
+        "scene": "String — setting and narrative context for this panel",
+        "visual_description": "String — detailed description of what to draw: characters, environment, action",
+        "characters": ["List of character names appearing in this panel"],
+        "narration": "String — caption/voiceover text explaining the educational concept",
+        "dialogue": "String — what the characters are saying in this panel"
       }}
     ]
   }},
   "quiz": {{
-    "quiz_title": "String",
+    "quiz_title": "String — title for this quiz",
     "questions": [
       {{
-        "question": "String",
+        "question": "String — clear, specific question about the chapter content",
         "options": ["Option A", "Option B", "Option C", "Option D"],
-        "correct_answer": "String (must match one of the options exactly)",
-        "explanation": "String (why this is the correct answer)"
+        "correct_answer": "String — must match one of the options exactly",
+        "explanation": "String — explains why the correct answer is right, referencing the chapter content"
       }}
     ]
   }}
 }}
 
-IMPORTANT:
-- The "panels" list must contain exactly 6 panels.
-- The "questions" list must contain exactly 5 questions.
+## IMPORTANT
+- The "panels" list must contain exactly 6 panels numbered 1 to 6.
+- The "questions" list must contain exactly {question_count} questions.
 - Each question must have exactly 4 options.
-- Do not invent information outside of the provided text.
+- The correct_answer value must be an exact copy of one of the 4 options.
 
-Content:
+## CHAPTER TEXT
 {text}

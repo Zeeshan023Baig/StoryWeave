@@ -21,6 +21,8 @@ def generate_audio_bytes(text):
         raise RuntimeError(f"Audio generation failed: {str(e)}")
 
 
+from config.settings import PLAYBACK_SPEED_OPTIONS
+
 # Backwards-compatible alias used by older callers
 def generate_audio_file(text):
     """Deprecated: use generate_audio_bytes() instead. Kept for compatibility."""
