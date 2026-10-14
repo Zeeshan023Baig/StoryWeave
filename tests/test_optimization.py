@@ -334,6 +334,104 @@ class TestGeminiRetry503(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────
+# Gemini 3.8 Flash integration & configuration tests
+# ──────────────────────────────────────────────────────────────
+
+class TestGemini38Integration(unittest.TestCase):
+    """
+    Tests ensuring Gemini 3.8 Flash integration works properly,
+    uses the centralized model configuration, sends no unsupported legacy
+    parameters (temperature, top_p, top_k, candidate_count), and maintains
+    retry/error policies.
+    """
+
+    def test_gemini_38_model_configuration(self):
+        """Verifies that centralized model configuration specifies gemini-3.8-flash."""
+        from config.settings import MODEL_NAME
+        self.assertEqual(MODEL_NAME, "gemini-3.8-flash")
+
+    @patch("modules.llm_service.get_client")
+    def test_gemini_38_generate_text_call(self, mock_get_client):
+        """
+        Verifies generate_text invokes client with gemini-3.8-flash and
+        does not pass unsupported legacy parameters in config.
+        """
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = "Educational summary for Gemini 3.8"
+        mock_client.models.generate_content.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        from modules.llm_service import generate_text
+
+        result = generate_text("Summarize photosynthesis", system_instruction="Be concise")
+
+        self.assertEqual(result, "Educational summary for Gemini 3.8")
+        mock_client.models.generate_content.assert_called_once()
+        _, kwargs = mock_client.models.generate_content.call_args
+        self.assertEqual(kwargs.get("model"), "gemini-3.8-flash")
+        self.assertEqual(kwargs.get("contents"), "Summarize photosynthesis")
+
+        config = kwargs.get("config")
+        self.assertIsNotNone(config)
+        self.assertEqual(config.system_instruction, "Be concise")
+        for legacy_param in ["temperature", "top_p", "top_k", "candidate_count"]:
+            val = getattr(config, legacy_param, None)
+            self.assertIsNone(val, f"Legacy parameter {legacy_param} should not be set")
+
+    @patch("modules.llm_service.get_client")
+    def test_gemini_38_generate_json_call(self, mock_get_client):
+        """
+        Verifies generate_json invokes client with gemini-3.8-flash,
+        response_mime_type application/json, and no legacy parameters.
+        """
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = '{"status": "ok", "topics": ["chlorophyll"]}'
+        mock_client.models.generate_content.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        from modules.llm_service import generate_json
+
+        result = generate_json("Return topics in JSON")
+
+        self.assertEqual(result, {"status": "ok", "topics": ["chlorophyll"]})
+        mock_client.models.generate_content.assert_called_once()
+        _, kwargs = mock_client.models.generate_content.call_args
+        self.assertEqual(kwargs.get("model"), "gemini-3.8-flash")
+        self.assertEqual(kwargs.get("contents"), "Return topics in JSON")
+
+        config = kwargs.get("config")
+        self.assertIsNotNone(config)
+        self.assertEqual(config.response_mime_type, "application/json")
+        for legacy_param in ["temperature", "top_p", "top_k", "candidate_count"]:
+            val = getattr(config, legacy_param, None)
+            self.assertIsNone(val, f"Legacy parameter {legacy_param} should not be set")
+
+    @patch("modules.llm_service.time.sleep", return_value=None)
+    @patch("modules.llm_service.get_client")
+    def test_gemini_38_404_not_found_not_retried(self, mock_get_client, mock_sleep):
+        """
+        404 NOT_FOUND error (e.g. decommissioned model) is immediately raised
+        without retrying or sleeping.
+        """
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = Exception(
+            "404 NOT_FOUND: models/gemini-2.5-flash is no longer available to new users."
+        )
+        mock_get_client.return_value = mock_client
+
+        from modules.llm_service import generate_json
+
+        with self.assertRaises(RuntimeError) as ctx:
+            generate_json("test prompt")
+
+        self.assertIn("404", str(ctx.exception))
+        self.assertEqual(mock_client.models.generate_content.call_count, 1)
+        mock_sleep.assert_not_called()
+
+
+# ──────────────────────────────────────────────────────────────
 # Audio generator tests
 # ──────────────────────────────────────────────────────────────
 

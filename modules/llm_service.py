@@ -10,10 +10,10 @@ from config.settings import GEMINI_API_KEY, MODEL_NAME
 _MAX_RETRIES = 3
 _BACKOFF_SECONDS = [2, 5, 10]   # wait before attempt 2, 3, 4
 
-# Error substrings that should NOT be retried (auth / validation)
+# Error substrings that should NOT be retried (auth / validation / not found)
 _NO_RETRY_SUBSTRINGS = [
-    "401", "403",
-    "API_KEY_INVALID", "PERMISSION_DENIED", "INVALID_ARGUMENT", "400",
+    "401", "403", "404",
+    "API_KEY_INVALID", "PERMISSION_DENIED", "INVALID_ARGUMENT", "400", "NOT_FOUND",
 ]
 
 # Error substrings that signal 429 rate-limit / quota

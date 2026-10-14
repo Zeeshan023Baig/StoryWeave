@@ -4,11 +4,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-3.8-flash"
 
 # ── PDF chunking ──────────────────────────────────────────────────────────────
 # Maximum characters sent to Gemini in a single call.
-# Gemini 2.5 Flash has a large context window, but very large PDFs can still
+# Gemini 3.8 Flash has a large context window, but very large PDFs can still
 # degrade output quality or hit limits.  Chapters under this limit skip
 # chunking entirely (the normal fast path).
 CHUNK_CHAR_LIMIT = 30_000   # ~5 000–8 000 words — covers most textbook chapters
