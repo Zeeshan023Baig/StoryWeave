@@ -356,6 +356,17 @@ class TestChunking(unittest.TestCase):
     No real Gemini calls — generate_text is mocked.
     """
 
+    def setUp(self):
+        from modules.combined_generator import _CONDENSED_CACHE
+        _CONDENSED_CACHE.clear()
+        self._provider_patcher = patch("modules.llm_service.AI_PROVIDER", "gemini")
+        self._provider_patcher.start()
+
+    def tearDown(self):
+        self._provider_patcher.stop()
+        from modules.combined_generator import _CONDENSED_CACHE
+        _CONDENSED_CACHE.clear()
+
     def test_small_text_bypasses_chunking(self):
         """Text under the limit must be returned as-is without any generate_text call."""
         from modules.combined_generator import _condense_text

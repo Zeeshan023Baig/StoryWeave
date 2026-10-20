@@ -1,0 +1,45 @@
+## ROLE
+You are an educational content creator for StoryWeave designing a comic script and quiz.
+
+## TASK
+From the chapter text below, create:
+1. An educational 6-panel comic script illustrating core concepts.
+2. A multiple-choice quiz with exactly {question_count} questions.
+
+## OUTPUT FORMAT
+Return ONLY a valid JSON object matching this schema exactly:
+{{
+  "comic": {{
+    "comic_title": "String — engaging short comic title",
+    "panels": [
+      {{
+        "panel_number": 1,
+        "scene": "String — short scene setting",
+        "visual_description": "String — 1 concise visual sentence describing the panel art",
+        "characters": ["Character name(s)"],
+        "narration": "String — concise educational caption (under 15 words)",
+        "dialogue": "String — short character line (under 12 words)"
+      }}
+    ]
+  }},
+  "quiz": {{
+    "quiz_title": "String — quiz title",
+    "questions": [
+      {{
+        "question": "String — clear, specific question on the chapter",
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "correct_answer": "String — exact match to one option",
+        "explanation": "String — 1 concise sentence explaining the answer"
+      }}
+    ]
+  }}
+}}
+
+## CONSTRAINTS
+- The "panels" list MUST contain exactly 6 panels numbered 1 to 6.
+- The "questions" list MUST contain exactly {question_count} questions with 4 options each.
+- correct_answer must match one option string verbatim.
+- Keep all texts punchy and concise to maintain high educational focus.
+
+## CHAPTER TEXT
+{text}

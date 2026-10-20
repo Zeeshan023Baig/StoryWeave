@@ -26,6 +26,7 @@ Use the uploaded chapter as your primary source of truth.
 
 ## OUTPUT
 Return a clear educational response suitable for displaying in Streamlit.
+Keep the response concise, structured, and direct without unnecessary filler or repetitive phrases.
 Use clear headings, bullet points, and formatting where helpful for readability.
 Ground every statement in the chapter text.
 

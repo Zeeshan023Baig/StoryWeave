@@ -12,11 +12,13 @@ from modules.combined_generator import (
 from modules.image_generator import generate_image_bytes
 from modules.audio_generator import generate_audio_bytes
 from config.settings import GEMINI_API_KEY, PLAYBACK_SPEED_OPTIONS
+from modules.llm_service import _get_active_provider
 
 st.set_page_config(page_title="StoryWeave", layout="wide", page_icon="📚")
 
 # ── Startup guard ────────────────────────────────────────────────────────────
-if not GEMINI_API_KEY:
+# Only Gemini cloud requires GEMINI_API_KEY; local Ollama runs completely keyless.
+if _get_active_provider() == "gemini" and not GEMINI_API_KEY:
     st.error(
         "⚠️ **GEMINI_API_KEY is missing.** "
         "Add it to your `.env` file and restart the app."
@@ -31,7 +33,9 @@ _STATE_KEYS = {
     "analysis": None,
     "simplified": None,
     "comic": None,
+    "comic_warning": "",     # non-fatal warning message when comic is unavailable
     "quiz": None,
+    "quiz_warning": "",      # warning message when quiz is unavailable
     "audio_bytes": None,     # raw MP3 bytes (None = not generated / failed)
     "audio_warning": "",     # non-fatal warning message for audio failures
     "audio_speed": 1.0,      # playback rate for explanation audio
@@ -51,6 +55,12 @@ _STATE_KEYS = {
     "assistant_audio_bytes": None,
     "assistant_audio_warning": "",
     "assistant_user_query": "",
+    # ── PDF Preview (local extraction, zero Gemini calls) ─────────────────────
+    "pdf_preview_filename": "",     # original filename shown in preview
+    "pdf_preview_pages": 0,         # page count
+    "pdf_preview_words": 0,         # word count
+    "pdf_preview_chars": 0,         # character count
+    "pdf_preview_error": "",        # extraction error message if any
 }
 for k, v in _STATE_KEYS.items():
     if k not in st.session_state:
@@ -67,7 +77,7 @@ def _cache_hit(current_hash: str, current_level: str) -> bool:
         st.session_state.pdf_hash == current_hash
         and st.session_state.gen_level == current_level
         and st.session_state.analysis is not None
-        and st.session_state.comic is not None
+        and (st.session_state.comic is not None or st.session_state.quiz is not None)
     )
 
 
@@ -99,6 +109,62 @@ def _render_audio_player(audio_bytes: bytes, speed: float = 1.0, player_id: str 
     st.components.v1.html(audio_html, height=65)
 
 
+def _format_ai_error(err_str: str, context: str = "") -> str:
+    """
+    Format a provider-aware, user-friendly error message for Streamlit UI.
+    Distinguishes timeout, 429 quota, 503 availability, connection issues, and general errors.
+    Does not claim a Gemini quota error when Ollama is active.
+    """
+    provider = _get_active_provider().lower().strip()
+    provider_name = "Ollama" if provider == "ollama" else ("Gemini" if provider == "gemini" else "AI")
+    lower_err = err_str.lower()
+    during_phrase = f" during {context}" if context else ""
+
+    # 1. Timeout
+    if "timed out" in lower_err or "timeout" in lower_err:
+        return (
+            f"⏱️ **{provider_name} request timed out{during_phrase}.** "
+            "The model took too long to respond. Please try again or select a shorter chapter."
+        )
+
+    # 2. Quota / Rate limit (429 / RESOURCE_EXHAUSTED)
+    if "resource_exhausted" in lower_err or "429" in lower_err:
+        if provider == "gemini":
+            return (
+                f"❌ Gemini quota exceeded (429){during_phrase}. "
+                "Wait a moment and try again, or check your API plan."
+            )
+        else:
+            return (
+                f"❌ AI rate limit / resource limit reached (429){during_phrase}. "
+                "Wait a moment and try again."
+            )
+
+    # 3. Unavailable / 503
+    if "unavailable" in lower_err or "503" in lower_err:
+        return (
+            f"❌ {provider_name} service is temporarily unavailable (503){during_phrase}. "
+            "Please try again in a few moments."
+        )
+
+    # 4. Ollama connection refused
+    if "cannot connect to ollama" in lower_err or "connection refused" in lower_err:
+        return (
+            f"❌ Cannot connect to local Ollama server{during_phrase}. "
+            "Please verify Ollama is running (`ollama serve`)."
+        )
+
+    # 5. Ollama model missing
+    if "not found (http 404)" in lower_err or ("model" in lower_err and "not found" in lower_err):
+        return (
+            f"❌ Ollama model not found{during_phrase}. "
+            "Please install the required model using `ollama pull qwen3.5:4b`."
+        )
+
+    # 6. General fallback
+    return f"❌ {provider_name} error{during_phrase}: {err_str}"
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.title("StoryWeave")
 st.subheader("Multimodal Generative AI for Adaptive and Inclusive Learning")
@@ -110,7 +176,9 @@ with st.sidebar:
         "Select Learning Level", ["Beginner", "Intermediate", "Advanced"]
     )
 
-    # Automatically extract text from PDF on upload so AI Assistant is ready immediately
+    # ── Auto-extract on upload (no Gemini) ───────────────────────────────────
+    # Extracts text locally using PyMuPDF and stores metadata in session state
+    # so the PDF Preview tab is always populated immediately after upload.
     if uploaded_file is not None:
         try:
             raw_bytes = uploaded_file.getvalue()
@@ -120,18 +188,30 @@ with st.sidebar:
                     uploaded_file.seek(0)
                     pdf_data = extract_text_from_pdf(uploaded_file)
                     if pdf_data and not pdf_data.get("error"):
-                        st.session_state.pdf_text = pdf_data.get("text", "")
-                        st.session_state.pdf_hash = current_file_hash
-                        st.session_state.gen_level = learning_level
+                        st.session_state.pdf_text           = pdf_data.get("text", "")
+                        st.session_state.pdf_hash           = current_file_hash
+                        st.session_state.gen_level          = learning_level
+                        st.session_state.pdf_preview_filename = uploaded_file.name
+                        st.session_state.pdf_preview_pages  = pdf_data.get("page_count", 0)
+                        st.session_state.pdf_preview_words  = pdf_data.get("word_count", 0)
+                        st.session_state.pdf_preview_chars  = pdf_data.get("char_count", 0)
+                        st.session_state.pdf_preview_error  = ""
                         # Clear old derived data from prior PDF
-                        st.session_state.analysis = None
-                        st.session_state.simplified = None
-                        st.session_state.comic = None
-                        st.session_state.quiz = None
+                        st.session_state.analysis           = None
+                        st.session_state.simplified         = None
+                        st.session_state.comic              = None
+                        st.session_state.quiz               = None
                         st.session_state.all_quiz_questions = []
                         st.session_state.assistant_response = ""
                         st.session_state.assistant_audio_bytes = None
-                        st.session_state.retest_quiz = None
+                        st.session_state.retest_quiz        = None
+                    elif pdf_data and pdf_data.get("error"):
+                        st.session_state.pdf_hash           = current_file_hash
+                        st.session_state.pdf_preview_filename = uploaded_file.name
+                        st.session_state.pdf_preview_pages  = pdf_data.get("page_count", 0)
+                        st.session_state.pdf_preview_words  = 0
+                        st.session_state.pdf_preview_chars  = 0
+                        st.session_state.pdf_preview_error  = pdf_data.get("error", "Unknown extraction error.")
         except Exception:
             pass
 
@@ -208,19 +288,7 @@ with st.sidebar:
                     st.error(f"❌ Content generation failed (bad response): {str(e)}")
                     st.stop()
                 except RuntimeError as e:
-                    err = str(e)
-                    if "RESOURCE_EXHAUSTED" in err or "429" in err:
-                        st.error(
-                            "❌ Gemini quota exceeded (429). "
-                            "Wait a moment and try again, or check your API plan."
-                        )
-                    elif "UNAVAILABLE" in err or "503" in err:
-                        st.error(
-                            "❌ Gemini is temporarily unavailable (503). "
-                            "All retries failed. Please try again in a few minutes."
-                        )
-                    else:
-                        st.error(f"❌ Gemini error: {err}")
+                    st.error(_format_ai_error(str(e)))
                     st.stop()
                 except Exception as e:
                     st.error(f"❌ Unexpected error during analysis: {str(e)}")
@@ -241,31 +309,59 @@ with st.sidebar:
                 except Exception as e:
                     st.session_state.audio_warning = f"Audio generation failed: {str(e)}"
 
-            # ── Gemini Call 2: Comic Script + Quiz ────────────────────────────
+            # ── Call 2: Comic Script & Quiz (non-fatal comic, resilient quiz) ─
             with st.spinner("Generating comic script & quiz…"):
+                comic = None
+                quiz = None
+                comic_err = ""
+                quiz_err = ""
                 try:
                     comic, quiz = generate_comic_and_quiz(pdf_text)
-                    st.session_state.comic = comic
-                    st.session_state.quiz = quiz
-                    st.session_state.all_quiz_questions = list(quiz.get("questions", []))
                 except ValueError as e:
-                    st.error(f"❌ Comic/quiz generation failed (bad response): {str(e)}")
-                    st.stop()
+                    comic_err = str(e)
+                    quiz_err = str(e)
                 except RuntimeError as e:
-                    err = str(e)
-                    if "RESOURCE_EXHAUSTED" in err or "429" in err:
-                        st.error(
-                            "❌ Gemini quota exceeded (429) during comic/quiz generation. "
-                            "Analysis content is still available in the other tabs."
-                        )
-                    elif "UNAVAILABLE" in err or "503" in err:
-                        st.error(
-                            "❌ Gemini unavailable (503) during comic/quiz generation. "
-                            "Analysis content is still available in the other tabs."
-                        )
-                    else:
-                        st.error(f"❌ Comic/quiz error: {err}")
-                    # Don't st.stop() — analysis is already saved and displayable
+                    err_msg = _format_ai_error(str(e), context="comic/quiz generation")
+                    comic_err = err_msg
+                    quiz_err = err_msg
+                except Exception as e:
+                    comic_err = f"Unexpected error: {str(e)}"
+                    quiz_err = f"Unexpected error: {str(e)}"
+
+                st.session_state.comic = comic
+                st.session_state.quiz = quiz
+
+                if comic:
+                    st.session_state.comic_warning = ""
+                else:
+                    st.session_state.comic_warning = (
+                        comic_err or "Comic generation is currently unavailable for this chapter."
+                    )
+
+                if quiz:
+                    st.session_state.quiz_warning = ""
+                    st.session_state.all_quiz_questions = list(quiz.get("questions", []))
+                else:
+                    st.session_state.quiz_warning = (
+                        quiz_err or "Quiz generation is currently unavailable."
+                    )
+
+                # Differentiate successful quiz from comic unavailable clearly
+                if quiz and not comic:
+                    st.info(
+                        "💡 **Quiz Ready:** The 5-question quiz was generated successfully! "
+                        "Comic script was unavailable for this chapter. Check the **Quiz** tab."
+                    )
+                elif comic and not quiz:
+                    st.warning(
+                        "⚠️ **Comic Ready, Quiz Unavailable:** The comic script was generated, "
+                        "but the quiz was unavailable. Check the **Comic Story** tab."
+                    )
+                elif not comic and not quiz:
+                    st.warning(
+                        "⚠️ **Comic & Quiz Unavailable:** Comic and quiz could not be generated for this chapter. "
+                        "Chapter Overview and Simplified Learning remain fully available in their respective tabs."
+                    )
 
             # ── Comic images (strictly optional, never block script display) ──
             if st.session_state.comic:
@@ -292,9 +388,72 @@ with st.sidebar:
                     st.session_state.image_warning = unique_reasons[0]
 
 # ── Main tabs ─────────────────────────────────────────────────────────────────
-tab0, tab1, tab2, tab3, tab4 = st.tabs(
-    ["💬 Ask StoryWeave", "📋 Overview", "📖 Simplified Learning", "🎨 Comic Story", "❓ Quiz"]
+tab_pdf, tab0, tab1, tab2, tab3, tab4 = st.tabs(
+    ["📄 PDF Preview", "💬 Ask StoryWeave", "📋 Overview", "📖 Simplified Learning", "🎨 Comic Story", "❓ Quiz"]
 )
+
+# ── Tab: PDF Preview (local extraction — zero AI calls) ───────────────────
+with tab_pdf:
+    st.header("📄 PDF Preview — Local Extraction")
+    st.caption(
+        "Text is extracted locally using PyMuPDF immediately after upload. "
+        "**No AI model call** is made to display this content."
+    )
+
+    has_preview = bool(st.session_state.pdf_preview_filename)
+
+    if not has_preview:
+        st.info("📂 Upload a PDF in the sidebar to see the extracted text here.")
+    elif st.session_state.pdf_preview_error:
+        # ── Extraction error (e.g. scanned/image-only PDF) ────────────────────
+        st.error(
+            f"❌ No text could be extracted from **{st.session_state.pdf_preview_filename}**.  \n"
+            f"Reason: {st.session_state.pdf_preview_error}  \n"
+            "This may be a scanned or image-only PDF."
+        )
+        col_p, col_w, col_c = st.columns(3)
+        col_p.metric("Pages", st.session_state.pdf_preview_pages)
+        col_w.metric("Words", "0")
+        col_c.metric("Characters", "0")
+    else:
+        # ── Successful extraction ─────────────────────────────────────────────
+        st.success(f"✅ PDF successfully read — **{st.session_state.pdf_preview_filename}**")
+
+        col_p, col_w, col_c = st.columns(3)
+        col_p.metric("📄 Pages",      st.session_state.pdf_preview_pages)
+        col_w.metric("📝 Words",      f"{st.session_state.pdf_preview_words:,}")
+        col_c.metric("🔤 Characters", f"{st.session_state.pdf_preview_chars:,}")
+
+        extracted_text = st.session_state.pdf_text or ""
+        _PREVIEW_LIMIT = 4000
+
+        with st.expander("📖 View Extracted PDF Content", expanded=True):
+            if not extracted_text.strip():
+                st.warning("No text content available to display.")
+            else:
+                preview_chunk = extracted_text[:_PREVIEW_LIMIT]
+                st.text_area(
+                    label="Extracted text (first {:,} characters)".format(min(_PREVIEW_LIMIT, len(extracted_text))),
+                    value=preview_chunk,
+                    height=380,
+                    disabled=True,
+                    key="pdf_preview_text_area",
+                )
+                if len(extracted_text) > _PREVIEW_LIMIT:
+                    remaining = len(extracted_text) - _PREVIEW_LIMIT
+                    with st.expander(
+                        f"🔽 Show full text ({len(extracted_text):,} characters total — "
+                        f"{remaining:,} more characters remaining)"
+                    ):
+                        st.text_area(
+                            label="Full extracted text",
+                            value=extracted_text,
+                            height=600,
+                            disabled=True,
+                            key="pdf_preview_full_text_area",
+                        )
+                else:
+                    st.caption(f"Showing all {len(extracted_text):,} characters — full document displayed above.")
 
 # ── Tab 0: AI Learning Assistant ──────────────────────────────────────────────
 with tab0:
@@ -366,8 +525,12 @@ with tab0:
                     st.session_state.assistant_audio_bytes = None
                     st.session_state.assistant_audio_warning = ""
                     st.rerun()
-                except (ValueError, RuntimeError) as e:
-                    st.error(f"❌ AI Assistant error: {e}")
+                except (ValueError, RuntimeError, TimeoutError) as e:
+                    err = str(e)
+                    if "timed out" in err.lower() or "timeout" in err.lower():
+                        st.error("⏱️ **AI Assistant request timed out.** The model took too long to respond. Please try again.")
+                    else:
+                        st.error(f"❌ AI Assistant error: {e}")
 
     # Display generated response clearly below the input
     if st.session_state.assistant_response:
@@ -541,6 +704,12 @@ with tab3:
                     dialogue = panel.get("dialogue", "")
                     if dialogue:
                         st.write(f"**Dialogue:** {dialogue}")
+    elif st.session_state.comic_warning:
+        st.header("🎨 Comic Story")
+        st.warning(
+            f"⚠️ **Comic Unavailable:** {st.session_state.comic_warning}  \n"
+            "Your educational quiz and chapter materials remain fully accessible in the other tabs."
+        )
     else:
         st.info("Generate content to see the comic script.")
 
@@ -631,8 +800,15 @@ with tab4:
                         st.session_state.retest_answers   = {}
                         st.session_state.retest_score     = 0
                         st.rerun()
-                    except (ValueError, RuntimeError) as e:
-                        st.error(f"❌ Could not generate retest: {e}")
+                    except (ValueError, RuntimeError, TimeoutError) as e:
+                        err = str(e)
+                        if "timed out" in err.lower() or "timeout" in err.lower():
+                            st.error("⏱️ **Retest generation timed out.** The model took too long to respond. Please try again.")
+                        else:
+                            st.error(f"❌ Could not generate retest: {e}")
+    elif st.session_state.quiz_warning:
+        st.header("❓ Quiz")
+        st.warning(f"⚠️ **Quiz Unavailable:** {st.session_state.quiz_warning}")
     else:
         st.info("Generate content to take the quiz.")
 

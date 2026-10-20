@@ -202,6 +202,8 @@ class TestGeminiRetry503(unittest.TestCase):
     """Tests for _call_gemini_with_retry() in modules.llm_service."""
 
     def setUp(self):
+        self._provider_patcher = patch("modules.llm_service.AI_PROVIDER", "gemini")
+        self._provider_patcher.start()
         self.sample_text = (
             "Photosynthesis is the process by which plants produce "
             "glucose and oxygen from sunlight, water, and CO2."
@@ -226,6 +228,9 @@ class TestGeminiRetry503(unittest.TestCase):
                 "quick_summary": "Sunlight + Water + CO2 = Sugar + Oxygen.",
             },
         }
+
+    def tearDown(self):
+        self._provider_patcher.stop()
 
     @patch("modules.llm_service.time.sleep", return_value=None)
     @patch("modules.llm_service.get_client")
@@ -344,6 +349,13 @@ class TestGemini38Integration(unittest.TestCase):
     parameters (temperature, top_p, top_k, candidate_count), and maintains
     retry/error policies.
     """
+
+    def setUp(self):
+        self._provider_patcher = patch("modules.llm_service.AI_PROVIDER", "gemini")
+        self._provider_patcher.start()
+
+    def tearDown(self):
+        self._provider_patcher.stop()
 
     def test_gemini_38_model_configuration(self):
         """Verifies that centralized model configuration specifies gemini-3.8-flash."""
@@ -707,5 +719,170 @@ class TestImageGenerator(unittest.TestCase):
             
         self.assertIn("Pixazo API free endpoint unavailable", str(ctx.exception))
 
+
+# ──────────────────────────────────────────────────────────────
+# Large-PDF Request Bounding & Timeout Handling Tests
+# ──────────────────────────────────────────────────────────────
+
+class TestLargePDFOptimizationAndTimeout(unittest.TestCase):
+    """
+    Mocked tests verifying:
+    - Large PDFs are condensed so Gemini does not receive oversized prompts.
+    - Low thinking level ("LOW") and HTTP timeouts are configured on requests.
+    - Timeouts fail fast without retrying/hanging.
+    - Zero real API calls are consumed.
+    """
+
+    def setUp(self):
+        from modules.combined_generator import _CONDENSED_CACHE
+        _CONDENSED_CACHE.clear()
+        self._provider_patcher = patch("modules.llm_service.AI_PROVIDER", "gemini")
+        self._provider_patcher.start()
+        from config.settings import CHUNK_CHAR_LIMIT
+        self.chunk_limit = CHUNK_CHAR_LIMIT
+        self.large_text = "Educational biology text explaining cellular respiration and ATP generation. " * 400
+        self.condensed_summary = "Condensed: Cells convert nutrients to ATP via cellular respiration."
+
+        self.mock_analysis_resp = {
+            "analysis": {
+                "chapter_title": "Cellular Respiration",
+                "topic": "Biology",
+                "key_concepts": ["Glycolysis", "Krebs Cycle"],
+                "key_terms": ["ATP", "Mitochondria"],
+                "important_facts": ["Occurs in mitochondria"],
+                "learning_objectives": ["Understand ATP"],
+                "difficulty": "Intermediate",
+                "prerequisite_concepts": ["Cell structure"],
+            },
+            "simplified": {
+                "chapter_title": "Cellular Respiration",
+                "overview": "How cells make energy.",
+                "key_concepts": [],
+                "detailed_explanation": "Glucose is broken down to release energy.",
+                "important_terms": [],
+                "quick_summary": "Glucose -> ATP.",
+            },
+        }
+
+        self.mock_comic_quiz_resp = {
+            "comic": {
+                "comic_title": "The Powerhouse",
+                "panels": [
+                    {
+                        "panel_number": i,
+                        "scene": f"Inside the cell part {i}",
+                        "visual_description": f"Microscopic Mitochondria {i}",
+                        "characters": ["Mito"],
+                        "narration": f"Stage {i} begins.",
+                        "dialogue": "Let's make ATP!",
+                    }
+                    for i in range(1, 7)
+                ],
+            },
+            "quiz": {
+                "quiz_title": "Respiration Quiz",
+                "questions": [
+                    {
+                        "question": f"Question {i}?",
+                        "options": ["A", "B", "C", "D"],
+                        "correct_answer": "A",
+                        "explanation": "Because A.",
+                    }
+                    for i in range(1, 6)
+                ],
+            },
+        }
+
+    @patch("modules.combined_generator.generate_json")
+    @patch("modules.combined_generator.generate_text")
+    def test_large_pdf_bounds_call_1_gemini_request_size(self, mock_gen_text, mock_gen_json):
+        """Verify that Call 1 uses condensed text rather than the oversized raw text in Gemini prompt."""
+        mock_gen_text.return_value = self.condensed_summary
+        mock_gen_json.return_value = self.mock_analysis_resp
+
+        analysis, simplified = generate_analysis_and_simplified(self.large_text, level="Intermediate")
+
+        mock_gen_text.assert_called()
+        mock_gen_json.assert_called_once()
+        prompt_sent = mock_gen_json.call_args[0][0]
+
+        # Prompt must be significantly smaller than the raw input
+        self.assertLess(len(prompt_sent), len(self.large_text))
+        # Prompt must contain the condensed summary
+        self.assertIn(self.condensed_summary, prompt_sent)
+        # Raw oversized text must NOT be directly sent
+        self.assertNotIn(self.large_text, prompt_sent)
+
+    @patch("modules.combined_generator.generate_json")
+    @patch("modules.combined_generator.generate_text")
+    def test_large_pdf_bounds_call_2_gemini_request_size(self, mock_gen_text, mock_gen_json):
+        """Verify that Call 2 uses condensed text rather than the oversized raw text in Gemini prompt."""
+        mock_gen_text.return_value = self.condensed_summary
+        mock_gen_json.return_value = self.mock_comic_quiz_resp
+
+        comic, quiz = generate_comic_and_quiz(self.large_text)
+
+        mock_gen_text.assert_called()
+        mock_gen_json.assert_called_once()
+        prompt_sent = mock_gen_json.call_args[0][0]
+
+        # Prompt must be significantly smaller than the raw input
+        self.assertLess(len(prompt_sent), len(self.large_text))
+        self.assertIn(self.condensed_summary, prompt_sent)
+        self.assertNotIn(self.large_text, prompt_sent)
+
+    @patch("modules.llm_service.time.sleep", return_value=None)
+    @patch("modules.llm_service.get_client")
+    def test_timeout_error_is_not_retried_and_raises_immediately(self, mock_get_client, mock_sleep):
+        """
+        Verify API timeouts fail fast with a RuntimeError without retrying or
+        sleeping, preventing Streamlit UI hangs.
+        """
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = TimeoutError("Deadline exceeded / connection timed out")
+        mock_get_client.return_value = mock_client
+
+        from modules.llm_service import generate_json
+
+        with self.assertRaises(RuntimeError) as ctx:
+            generate_json("test timeout prompt")
+
+        self.assertIn("timed out", str(ctx.exception).lower())
+        self.assertEqual(mock_client.models.generate_content.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    @patch("modules.llm_service.get_client")
+    def test_gemini_thinking_config_and_timeout_configured(self, mock_get_client):
+        """
+        Verify requests configure ThinkingLevel.LOW and HttpOptions timeout in milliseconds.
+        """
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = '{"status": "ok"}'
+        mock_client.models.generate_content.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        from modules.llm_service import generate_json
+        from config.settings import THINKING_LEVEL, GEMINI_TIMEOUT_SECONDS
+
+        generate_json("test thinking config")
+
+        mock_client.models.generate_content.assert_called_once()
+        _, kwargs = mock_client.models.generate_content.call_args
+        config = kwargs.get("config")
+
+        self.assertIsNotNone(config)
+        self.assertIsNotNone(config.thinking_config)
+        self.assertEqual(config.thinking_config.thinking_level, THINKING_LEVEL)
+        self.assertIsNotNone(config.http_options)
+        self.assertEqual(config.http_options.timeout, int(GEMINI_TIMEOUT_SECONDS * 1000))
+
+    def tearDown(self):
+        self._provider_patcher.stop()
+        from modules.combined_generator import _CONDENSED_CACHE
+        _CONDENSED_CACHE.clear()
+
+
 if __name__ == "__main__":
     unittest.main()
+

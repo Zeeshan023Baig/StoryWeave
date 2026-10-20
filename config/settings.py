@@ -3,15 +3,42 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ── AI Provider Selection ─────────────────────────────────────────────────────
+# Set AI_PROVIDER to "ollama" to route all LLM calls to the local Ollama server.
+# Set AI_PROVIDER to "gemini" to use the Google Gemini cloud API.
+# Switching providers requires only changing this single constant.
+AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama")  # "ollama" | "gemini"
+
+# ── Ollama Configuration ──────────────────────────────────────────────────────
+# Ollama runs locally — no API key required.
+# Install model:  ollama pull qwen3.5:2b
+# Start server:   ollama serve   (or it starts automatically)
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:2b")
+OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120"))
+OLLAMA_CHUNK_CHAR_LIMIT = int(os.getenv("OLLAMA_CHUNK_CHAR_LIMIT", "5000"))
+
+# ── Gemini Configuration ──────────────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MODEL_NAME = "gemini-3.8-flash"
 
+# ── Thinking Configuration ────────────────────────────────────────────────────
+# Gemini 3.8 Flash supports reasoning/thinking configuration (LOW, MEDIUM, HIGH).
+# Setting the lowest appropriate thinking level ("LOW") reduces unnecessary
+# reasoning latency and token usage while maintaining high structural quality.
+THINKING_LEVEL = "LOW"
+
+# ── API Timeout Configuration ─────────────────────────────────────────────────
+# Timeout in seconds for Gemini API calls to prevent Streamlit UI from hanging.
+GEMINI_TIMEOUT_SECONDS = 45
+
 # ── PDF chunking ──────────────────────────────────────────────────────────────
 # Maximum characters sent to Gemini in a single call.
-# Gemini 3.8 Flash has a large context window, but very large PDFs can still
-# degrade output quality or hit limits.  Chapters under this limit skip
-# chunking entirely (the normal fast path).
-CHUNK_CHAR_LIMIT = 30_000   # ~5 000–8 000 words — covers most textbook chapters
+# Gemini 3.8 Flash has a large context window, but sending massive PDFs
+# increases latency and token consumption significantly.
+# Setting a balanced limit ensures large texts are efficiently condensed
+# before being passed to Gemini analysis and generation prompts.
+CHUNK_CHAR_LIMIT = 15_000   # ~2 500–4 000 words — covers typical textbook chapters
 
 # ── Quiz configuration ────────────────────────────────────────────────────────
 QUIZ_QUESTION_COUNT = 5     # number of MCQ questions per quiz / retest

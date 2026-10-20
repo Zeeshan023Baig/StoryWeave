@@ -20,9 +20,16 @@ Large-PDF chunking:
 """
 
 import os
-from modules.llm_service import generate_json, generate_text
+from functools import lru_cache
+from modules.llm_service import (
+    generate_json,
+    generate_text,
+    _get_active_provider,
+    _extract_balanced_json_object,
+)
 from config.settings import (
     CHUNK_CHAR_LIMIT,
+    OLLAMA_CHUNK_CHAR_LIMIT,
     QUIZ_QUESTION_COUNT,
     LEVEL_INSTRUCTIONS,
 )
@@ -38,32 +45,52 @@ def _load_prompt(filename):
 
 # ── Large-PDF chunking ─────────────────────────────────────────────────────────
 
+_CONDENSED_CACHE = {}
+
+
+def _condense_text_ollama(text):
+    """
+    Lightweight, zero-LLM-call extractive condensation for local 4B model.
+    Bounds prompt size to OLLAMA_CHUNK_CHAR_LIMIT without burning local CPU cycles
+    on extra LLM summarisation calls.
+    """
+    if len(text) <= OLLAMA_CHUNK_CHAR_LIMIT:
+        return text
+
+    limit = OLLAMA_CHUNK_CHAR_LIMIT
+    head_len = int(limit * 0.50)
+    mid_len = int(limit * 0.30)
+    tail_len = int(limit * 0.20)
+
+    head = text[:head_len]
+    mid_start = max(head_len, (len(text) // 2) - (mid_len // 2))
+    mid = text[mid_start:mid_start + mid_len]
+    tail = text[-tail_len:] if tail_len > 0 else ""
+
+    return f"{head}\n\n[...]\n\n{mid}\n\n[...]\n\n{tail}".strip()
+
+
 def _condense_text(text):
     """
-    If *text* exceeds CHUNK_CHAR_LIMIT characters, split it into overlapping
-    windows and ask Gemini for a single condensed summary that preserves all
-    key educational content.  This costs 1 extra Gemini call but prevents
-    context-window failures on very large PDFs.
-
-    For ordinary textbook chapters (< CHUNK_CHAR_LIMIT) this function is a
-    no-op and returns the original text immediately — keeping the pipeline at
-    exactly 2 Gemini calls.
-
-    Chunking strategy
-    -----------------
-    - Window size : CHUNK_CHAR_LIMIT characters
-    - Overlap     : 500 characters (preserves sentence continuity at boundaries)
-    - The condensed summary from each window is joined, then a final pass
-      produces a single coherent condensed text.
-    - Total extra calls = 1 (regardless of number of windows) because we
-      concatenate partial summaries and do one final condensation call.
-
-    Trade-off documented for academic review:
-        Small PDF  → 0 extra calls, normal 2-call path.
-        Large PDF  → 1 extra condensation call, then normal 2-call path.
+    Route condensation based on active provider:
+    - Ollama: Fast zero-extra-call extractive condensation bounded to OLLAMA_CHUNK_CHAR_LIMIT.
+    - Gemini: Multi-chunk LLM condensation using CHUNK_CHAR_LIMIT (15_000).
+    Results are cached in-memory to prevent repeated work.
     """
+    provider = _get_active_provider()
+    cache_key = (hash(text), provider)
+    if cache_key in _CONDENSED_CACHE:
+        return _CONDENSED_CACHE[cache_key]
+
+    if provider == "ollama":
+        result = _condense_text_ollama(text)
+        _CONDENSED_CACHE[cache_key] = result
+        return result
+
+    # ── Gemini provider path (original multi-chunk logic preserved) ───────────
     if len(text) <= CHUNK_CHAR_LIMIT:
-        return text   # fast path — no chunking needed
+        _CONDENSED_CACHE[cache_key] = text
+        return text
 
     overlap = 500
     step = CHUNK_CHAR_LIMIT - overlap
@@ -85,7 +112,7 @@ def _condense_text(text):
             f"(part {i + 1} of {len(chunks)}).\n"
             "Preserve ALL key concepts, important terms, facts, and educational content.\n"
             "Do not add information not present in the text.\n"
-            "Be concise but comprehensive — this summary will be used for further analysis.\n\n"
+            "Be concise, direct, and structured — omit conversational filler or redundant prose.\n\n"
             "## SECTION TEXT\n"
             f"{chunk}"
         )
@@ -96,6 +123,7 @@ def _condense_text(text):
         partial_summaries.append(summary.strip())
 
     if len(partial_summaries) == 1:
+        _CONDENSED_CACHE[cache_key] = partial_summaries[0]
         return partial_summaries[0]
 
     # Final condensation — join partials into one coherent text
@@ -109,7 +137,8 @@ def _condense_text(text):
         "The following are summaries of consecutive sections of a textbook chapter.\n"
         "Merge them into ONE coherent educational text that preserves all key concepts,\n"
         "important terms, facts, and educational content from every section.\n"
-        "Do not add information not present in the summaries.\n\n"
+        "Do not add information not present in the summaries.\n"
+        "Be concise, direct, and structured — avoid conversational filler.\n\n"
         "## SECTION SUMMARIES\n"
         f"{joined}"
     )
@@ -117,7 +146,9 @@ def _condense_text(text):
         final_prompt,
         system_instruction="You are a helpful educational assistant."
     )
-    return condensed.strip()
+    result = condensed.strip()
+    _CONDENSED_CACHE[cache_key] = result
+    return result
 
 
 # ── Call 1: Analysis + Simplified Text ────────────────────────────────────────
@@ -147,7 +178,9 @@ def generate_analysis_and_simplified(text, level="Beginner"):
     # Resolve level instructions (fallback to Intermediate if unknown level passed)
     level_instructions = LEVEL_INSTRUCTIONS.get(level, LEVEL_INSTRUCTIONS["Intermediate"])
 
-    prompt_template = _load_prompt('combined_analysis_prompt.txt')
+    provider = _get_active_provider()
+    template_name = 'ollama_analysis_prompt.txt' if provider == "ollama" else 'combined_analysis_prompt.txt'
+    prompt_template = _load_prompt(template_name)
     prompt = (
         prompt_template
         .replace("{level}", level)
@@ -193,56 +226,13 @@ def generate_analysis_and_simplified(text, level="Beginner"):
 
 # ── Call 2: Comic Script + Quiz ────────────────────────────────────────────────
 
-def generate_comic_and_quiz(text):
-    """
-    Single Gemini call that produces both a 6-panel comic script
-    and a 5-question MCQ quiz.
-
-    Prompt-engineering approach (visible for academic review):
-    - ROLE        : expert educational content creator
-    - CONTEXT     : grounded in uploaded chapter text only
-    - TASK        : comic script + MCQ quiz generation
-    - CONSTRAINTS : no hallucination, exact panel/question counts enforced
-    - OUTPUT FORMAT: strict JSON schema matching app.py expectations
-
-    Returns: (comic_dict, quiz_dict)
-    Raises:  RuntimeError or ValueError on failure.
-    """
-    if not text or not text.strip():
-        raise ValueError("Cannot generate comic and quiz from empty text.")
-
-    working_text = _condense_text(text)
-
-    prompt_template = _load_prompt('combined_comic_quiz_prompt.txt')
-    prompt = (
-        prompt_template
-        .replace("{question_count}", str(QUIZ_QUESTION_COUNT))
-        .replace("{text}", working_text)
-    )
-
-    result = generate_json(
-        prompt,
-        system_instruction="You are a creative educational content creator."
-    )
-
-    if not isinstance(result, dict):
-        raise ValueError("Invalid response format: expected a JSON object.")
-
-    comic = result.get("comic")
-    quiz = result.get("quiz")
-
+def _validate_and_normalize_comic(comic: dict) -> dict | None:
+    """Validate and normalise comic panels without fabricating data."""
     if not isinstance(comic, dict):
-        raise ValueError("Gemini response missing valid 'comic' section.")
-    if not isinstance(quiz, dict):
-        raise ValueError("Gemini response missing valid 'quiz' section.")
-
-    comic.setdefault("comic_title", "Educational Comic")
-    quiz.setdefault("quiz_title", "Chapter Quiz")
-
-    # Validate and normalise panels
-    panels = comic.get("panels", [])
+        return None
+    panels = comic.get("panels")
     if not isinstance(panels, list) or len(panels) == 0:
-        raise ValueError("Gemini returned no comic panels.")
+        return None
 
     normalized_panels = []
     for i, p in enumerate(panels):
@@ -257,32 +247,142 @@ def generate_comic_and_quiz(text):
             "panel_number": panel_num,
             "scene": scene or scene_desc,
             "visual_description": vis_desc or scene_desc,
-            "scene_description": scene_desc,   # UI backward compatibility
+            "scene_description": scene_desc,
             "characters": p.get("characters", []),
             "narration": p.get("narration", ""),
             "dialogue": p.get("dialogue", ""),
         })
-    comic["panels"] = normalized_panels
 
-    # Validate and normalise questions
-    questions = quiz.get("questions", [])
+    if not normalized_panels:
+        return None
+
+    return {
+        "comic_title": comic.get("comic_title", "Educational Comic"),
+        "panels": normalized_panels,
+    }
+
+
+def _validate_and_normalize_quiz(quiz: dict) -> dict | None:
+    """Validate and normalise quiz questions without fabricating data."""
+    if not isinstance(quiz, dict):
+        return None
+    questions = quiz.get("questions")
     if not isinstance(questions, list) or len(questions) == 0:
-        raise ValueError("Gemini returned no quiz questions.")
+        return None
 
     normalized_questions = []
     for i, q in enumerate(questions):
         if not isinstance(q, dict):
             continue
-        options = q.get("options", [])
-        if not isinstance(options, list):
-            options = []
+        question_text = q.get("question")
+        options = q.get("options")
+        if not question_text or not isinstance(options, list) or len(options) < 2:
+            continue
+        correct_ans = q.get("correct_answer") or options[0]
+        explanation = q.get("explanation", "")
         normalized_questions.append({
-            "question": q.get("question", f"Question {i + 1}"),
-            "options": options,
-            "correct_answer": q.get("correct_answer", options[0] if options else ""),
-            "explanation": q.get("explanation", ""),
+            "question": str(question_text),
+            "options": [str(opt) for opt in options],
+            "correct_answer": str(correct_ans),
+            "explanation": str(explanation),
         })
-    quiz["questions"] = normalized_questions
+
+    if not normalized_questions:
+        return None
+
+    return {
+        "quiz_title": quiz.get("quiz_title", "Chapter Quiz"),
+        "questions": normalized_questions,
+    }
+
+
+def _generate_quiz_fallback(working_text: str) -> dict | None:
+    """
+    Perform a dedicated quiz-only fallback call generating exactly 5 MCQs.
+    Called when the combined Call 2 failed to produce a valid quiz.
+    """
+    prompt_template = _load_prompt('quiz_prompt.txt')
+    prompt = prompt_template.replace("{text}", working_text)
+    try:
+        result = generate_json(
+            prompt,
+            system_instruction="You are an expert educational assessment creator. Output exactly 5 multiple choice questions in JSON."
+        )
+        if isinstance(result, dict):
+            if "quiz" in result and isinstance(result["quiz"], dict):
+                return result["quiz"]
+            if "questions" in result and isinstance(result["questions"], list):
+                return result
+    except Exception:
+        pass
+    return None
+
+
+def generate_comic_and_quiz(text):
+    """
+    Produces comic script and 5-question MCQ quiz.
+    Comic generation is non-fatal; quiz generation is prioritized and recovered.
+
+    Returns: (comic_dict | None, quiz_dict | None)
+    Raises: ValueError on empty input or if both comic and quiz fail.
+    """
+    if not text or not text.strip():
+        raise ValueError("Cannot generate comic and quiz from empty text.")
+
+    working_text = _condense_text(text)
+
+    provider = _get_active_provider()
+    template_name = 'ollama_comic_quiz_prompt.txt' if provider == "ollama" else 'combined_comic_quiz_prompt.txt'
+    prompt_template = _load_prompt(template_name)
+    prompt = (
+        prompt_template
+        .replace("{question_count}", str(QUIZ_QUESTION_COUNT))
+        .replace("{text}", working_text)
+    )
+
+    comic = None
+    quiz = None
+    combined_err = None
+
+    try:
+        result = generate_json(
+            prompt,
+            system_instruction="You are a creative educational content creator."
+        )
+        if isinstance(result, dict):
+            if "comic" in result and isinstance(result["comic"], dict):
+                comic = _validate_and_normalize_comic(result["comic"])
+            if "quiz" in result and isinstance(result["quiz"], dict):
+                quiz = _validate_and_normalize_quiz(result["quiz"])
+    except Exception as e:
+        combined_err = e
+
+    # 1. If quiz is not valid yet, attempt recovery from error text if present
+    if quiz is None and combined_err is not None:
+        recovered_quiz = _extract_balanced_json_object(str(combined_err), "quiz")
+        if recovered_quiz:
+            quiz = _validate_and_normalize_quiz(recovered_quiz)
+
+    # 2. If comic is not valid yet, attempt recovery from error text if present
+    if comic is None and combined_err is not None:
+        recovered_comic = _extract_balanced_json_object(str(combined_err), "comic")
+        if recovered_comic:
+            comic = _validate_and_normalize_comic(recovered_comic)
+
+    # 3. If quiz is STILL None, perform dedicated quiz-only fallback call
+    if quiz is None:
+        fallback_raw = _generate_quiz_fallback(working_text)
+        if fallback_raw:
+            quiz = _validate_and_normalize_quiz(fallback_raw)
+
+    # 4. If BOTH comic and quiz failed completely, raise error
+    if comic is None and quiz is None:
+        if isinstance(combined_err, RuntimeError):
+            raise combined_err
+        if combined_err:
+            raise ValueError(f"Comic and quiz generation failed: {combined_err}")
+        else:
+            raise ValueError("Gemini response missing valid 'comic' and 'quiz' sections.")
 
     return comic, quiz
 
@@ -336,7 +436,9 @@ def generate_retest_quiz(text, previous_questions, level="Beginner"):
     level_str = level or "Beginner"
     level_instructions = LEVEL_INSTRUCTIONS.get(level_str, LEVEL_INSTRUCTIONS.get("Beginner", ""))
 
-    prompt_template = _load_prompt('retest_quiz_prompt.txt')
+    provider = _get_active_provider()
+    template_name = 'ollama_retest_prompt.txt' if provider == "ollama" else 'retest_quiz_prompt.txt'
+    prompt_template = _load_prompt(template_name)
     prompt = (
         prompt_template
         .replace("{question_count}", str(QUIZ_QUESTION_COUNT))
@@ -417,7 +519,9 @@ def generate_assistant_response(text, user_prompt, level="Beginner"):
     level_str = level or "Beginner"
     level_instructions = LEVEL_INSTRUCTIONS.get(level_str, LEVEL_INSTRUCTIONS.get("Beginner", ""))
 
-    prompt_template = _load_prompt('assistant_prompt.txt')
+    provider = _get_active_provider()
+    template_name = 'ollama_assistant_prompt.txt' if provider == "ollama" else 'assistant_prompt.txt'
+    prompt_template = _load_prompt(template_name)
     prompt = (
         prompt_template
         .replace("{level}", level_str)

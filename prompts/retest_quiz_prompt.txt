@@ -27,6 +27,7 @@ PREVIOUS QUESTIONS (exclude these):
 - Ground every question strictly in the provided chapter text.
 - Do not test knowledge from outside the source material.
 - Each question must have exactly 4 options and exactly 1 correct answer.
+- Keep questions, options, and explanations concise, direct, and unambiguous.
 - Do not repeat the same concept across multiple new questions where avoidable.
 - Return ONLY the JSON object — no markdown fences, no explanation text outside JSON.
 

@@ -34,8 +34,25 @@ def extract_text_from_pdf(pdf_stream):
         text = page.get_text()
         full_text += text + "\n"
 
-    # Clean text (remove excessive newlines, whitespace)
-    cleaned_text = re.sub(r'\n+', '\n', full_text).strip()
+    # ── Token-efficient cleaning ──────────────────────────────────────────────
+    # 1. Rejoin words hyphenated across line breaks (e.g. "pho-\nsynthesis" -> "photosynthesis")
+    normalized_text = re.sub(r'(\b\w+)-\s*\n\s*(\w+\b)', r'\1\2', full_text)
+
+    # 2. Filter out isolated page number markers and empty lines
+    cleaned_lines = []
+    for line in normalized_text.splitlines():
+        trimmed = re.sub(r'[ \t]+', ' ', line).strip()
+        if not trimmed:
+            cleaned_lines.append("")
+            continue
+        # Skip lone page numbers like "12", "Page 3", "Page 4 of 25"
+        if re.match(r'^(?:page\s*)?\d+(?:\s*(?:of|/)\s*\d+)?$', trimmed, re.IGNORECASE):
+            continue
+        cleaned_lines.append(trimmed)
+
+    rejoined_text = "\n".join(cleaned_lines)
+    # 3. Collapse multiple consecutive empty lines to at most two (paragraph separation)
+    cleaned_text = re.sub(r'\n{3,}', '\n\n', rejoined_text).strip()
     
     if not cleaned_text:
         return {
