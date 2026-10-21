@@ -1,8 +1,8 @@
 # StoryWeave
 ### A Multimodal Generative AI Framework for Adaptive and Inclusive Learning
 
-> **B.Tech Applied Generative AI — Project (Phase 1 MVP)**
-> Built with Python, Streamlit, PyMuPDF, and Google Gemini 2.5 Flash
+> **B.Tech Applied Generative AI — Project (Phase 2 MVP)**
+> Built with Python, Streamlit, PyMuPDF, Ollama (qwen3.5:2b), SQLite, and bcrypt
 
 ---
 
@@ -112,12 +112,14 @@ StoryWeave/
 | **Python 3.11+** | Core language |
 | **Streamlit** | Web UI and interactive dashboard |
 | **PyMuPDF** | PDF parsing and text extraction |
-| **Google Gemini 2.5 Flash** | LLM for all AI generation tasks |
+| **Ollama (qwen3.5:2b)** | Default local LLM for all AI generation tasks |
+| **Google Gemini** | Optional cloud LLM (set AI_PROVIDER=gemini) |
+| **SQLite + bcrypt** | Persistent multi-user storage and secure auth |
 | **gTTS** | Google Text-to-Speech for audio summaries |
 | **Pixazo Flux API** | AI image generation for comic panels |
 | **python-dotenv** | Secure API key management |
 | **google-genai** | Official Google GenAI Python SDK |
-| **requests** | HTTP client for Pixazo API |
+| **requests** | HTTP client for Ollama and Pixazo APIs |
 
 ---
 
@@ -244,16 +246,23 @@ streamlit run app.py
 - [x] PDF upload and text extraction (PyMuPDF)
 - [x] User-controlled AI Learning Assistant ("Ask StoryWeave") with custom prompt input
 - [x] Strict PDF grounding and anti-hallucination prompt engineering
-- [x] Gemini-powered chapter analysis (concise summary + key concepts)
 - [x] Adaptive simplified text (Beginner, Intermediate, Advanced)
 - [x] 6-panel educational comic script
 - [x] Interactive 5-question MCQ quiz with auto-grading and answer locking
 - [x] Retest functionality with unlimited attempts, exclusion accumulation, and level preservation
 - [x] Audio narration via gTTS with customizable playback speed (0.75x, 1.0x, 1.25x, 1.5x, 2.0x)
-- [x] PDF hash-based result caching (avoids redundant Gemini calls)
+- [x] PDF hash-based result caching (avoids redundant AI calls)
 - [x] Large-PDF chunking and condensation
-- [x] Optimised 2-call Gemini pipeline (with 503 transient retry)
+- [x] Optimised 2-call AI pipeline
 - [x] Friendly error handling throughout
+- [x] **Multi-user authentication** (login / register / logout)
+- [x] **Persistent SQLite learner profiles** per user
+- [x] **Per-user, per-document concept mastery tracking**
+- [x] **Quiz history persistence** across sessions
+- [x] **Learner Dashboard** (level, mastery, weak/strong concepts, quiz history)
+- [x] **User data isolation** (no cross-user data leaks)
+- [x] Ollama local LLM backend (default: qwen3.5:2b)
+- [x] Google Gemini cloud LLM backend (optional, set AI_PROVIDER=gemini)
 - [ ] Comic panel image generation (code integrated, Pixazo API endpoint is broken — 404)
 
 ---
@@ -262,12 +271,31 @@ streamlit run app.py
 
 | Feature | Phase |
 |---|---|
-| Fix/replace Pixazo image API with a working provider (e.g. Stability AI, Google Imagen) | Phase 2 |
-| User Authentication | Phase 3 |
-| Database (save sessions/history) | Phase 3 |
-| Learning Analytics Dashboard | Phase 3 |
+| Fix/replace Pixazo image API with a working provider (e.g. Stability AI, Google Imagen) | Phase 3 |
+| Learning Analytics Dashboard (advanced charts) | Phase 3 |
 | Content Recommendation System | Phase 3 |
 | Cloud Deployment (Streamlit Cloud / GCP) | Phase 3 |
+| User preference storage (preferred modality) | Phase 3 |
+
+---
+
+## Multi-User Adaptive Learning
+
+StoryWeave maintains an individual learner profile for each authenticated user. Quiz performance, concept mastery, estimated learner level, learning preferences, and chapter progress are associated with the user’s unique ID.
+
+Each user’s data is stored in a local SQLite database (`database/storyweave.db`) and is never shared with other users. Every database query is scoped to the authenticated `user_id`.
+
+### How it works:
+
+1. **Registration**: New users register with a username and password. Passwords are hashed using bcrypt — never stored in plain text.
+2. **Login**: Users authenticate and receive a session-scoped `user_id`. No password is held in session state.
+3. **Per-user learner profile**: Estimated level (Beginner / Intermediate / Advanced), overall mastery, and preferred learning format are stored persistently and loaded on login.
+4. **Per-document mastery**: Concept mastery is stored per `(user_id, doc_id)` pair. Different chapters have independent mastery tracking.
+5. **Quiz history**: Every quiz attempt is recorded with score, timestamp, and document ID. History is visible per-chapter in the Learner Dashboard.
+6. **Adaptive content**: The user’s actual learner profile (level, weak concepts, strong concepts) is injected into LLM prompts so each user receives genuinely personalised educational content.
+7. **Logout**: Clearing session state returns to the login screen. All persistent data in the database is preserved.
+
+> **Important:** The current adaptive learner system uses **rule-based performance analysis** combined with a **pretrained language model** for content generation. The system does **not** train or fine-tune its own ML model. Learner level estimation is computed from quiz scores using fixed mastery thresholds.
 
 
 ---

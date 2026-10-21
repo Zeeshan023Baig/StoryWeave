@@ -14,6 +14,23 @@ from modules.audio_generator import generate_audio_bytes
 from config.settings import GEMINI_API_KEY, PLAYBACK_SPEED_OPTIONS
 from modules.llm_service import _get_active_provider
 
+# ── Multi-user support ───────────────────────────────────────────────────────
+from database.database import init_db
+from services.auth_service import register_user, login_user
+from services.learner_service import (
+    load_profile,
+    save_quiz_result,
+    get_dashboard_data,
+    build_learner_context,
+)
+
+# Initialise SQLite database (idempotent — safe to call every start)
+try:
+    init_db()
+except RuntimeError as _db_init_err:
+    st.error(f"⚠️ Database initialisation failed: {_db_init_err}")
+    st.stop()
+
 st.set_page_config(page_title="StoryWeave", layout="wide", page_icon="📚")
 
 # ── Startup guard ────────────────────────────────────────────────────────────
@@ -27,8 +44,14 @@ if _get_active_provider() == "gemini" and not GEMINI_API_KEY:
 
 # ── Session-state initialisation ─────────────────────────────────────────────
 _STATE_KEYS = {
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    "user_id": None,         # authenticated user_id (None = not logged in)
+    "username": "",          # display name of logged-in user
+    "auth_mode": "login",    # "login" | "register" — controls which form to show
+    # ── PDF & generation ──────────────────────────────────────────────────────
     "pdf_text": "",
     "pdf_hash": "",          # MD5 of raw PDF bytes
+    "pdf_doc_id": "",        # stable content-based document identifier
     "gen_level": "",         # learning level used for last generation
     "analysis": None,
     "simplified": None,
@@ -44,18 +67,20 @@ _STATE_KEYS = {
     "quiz_submitted": False,
     "user_answers": {},
     "quiz_score": 0,
+    "quiz_saved": False,     # True once this quiz attempt has been saved to DB
     # ── Retest ────────────────────────────────────────────────────────────────
     "retest_quiz": None,         # quiz dict for the active retest (None = no retest yet)
     "retest_submitted": False,
     "retest_answers": {},
     "retest_score": 0,
+    "retest_saved": False,       # True once this retest has been saved to DB
     "all_quiz_questions": [],    # cumulative question objects to exclude across retests
     # ── AI Learning Assistant ─────────────────────────────────────────────────
     "assistant_response": "",
     "assistant_audio_bytes": None,
     "assistant_audio_warning": "",
     "assistant_user_query": "",
-    # ── PDF Preview (local extraction, zero Gemini calls) ─────────────────────
+    # ── PDF Preview (local extraction, zero AI calls) ─────────────────────────
     "pdf_preview_filename": "",     # original filename shown in preview
     "pdf_preview_pages": 0,         # page count
     "pdf_preview_words": 0,         # word count
@@ -65,6 +90,88 @@ _STATE_KEYS = {
 for k, v in _STATE_KEYS.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+
+# ── Auth helpers ─────────────────────────────────────────────────────────────
+def _is_authenticated() -> bool:
+    return bool(st.session_state.get("user_id"))
+
+
+def _logout():
+    """Clear auth state and return to login screen. Learner data is preserved in DB."""
+    st.session_state["user_id"]   = None
+    st.session_state["username"]  = ""
+    st.session_state["auth_mode"] = "login"
+    # Clear per-session content (not DB data)
+    for key in ["pdf_text", "pdf_hash", "pdf_doc_id", "gen_level",
+                "analysis", "simplified", "comic", "quiz",
+                "audio_bytes", "comic_images", "retest_quiz",
+                "quiz_submitted", "quiz_saved", "retest_submitted", "retest_saved",
+                "all_quiz_questions", "assistant_response", "assistant_audio_bytes"]:
+        st.session_state[key] = _STATE_KEYS.get(key)
+
+
+# ── Login / Register screen ───────────────────────────────────────────────────
+if not _is_authenticated():
+    st.title("📚 StoryWeave")
+    st.subheader("Multimodal Generative AI for Adaptive and Inclusive Learning")
+    st.divider()
+
+    mode = st.session_state.get("auth_mode", "login")
+
+    col_form, col_spacer = st.columns([1, 1])
+    with col_form:
+        if mode == "login":
+            st.header("🔐 Login")
+            login_username = st.text_input("Username", key="login_username_input")
+            login_password = st.text_input("Password", type="password", key="login_password_input")
+
+            if st.button("Login", type="primary", key="btn_login"):
+                try:
+                    result = login_user(login_username, login_password)
+                    st.session_state["user_id"]  = result["user_id"]
+                    st.session_state["username"] = result["username"]
+                    st.rerun()
+                except ValueError as _e:
+                    st.error(f"❌ {_e}")
+                except RuntimeError as _e:
+                    st.error(f"❌ Login failed: {_e}")
+
+            st.write("Don't have an account?")
+            if st.button("Create Account", key="btn_go_register"):
+                st.session_state["auth_mode"] = "register"
+                st.rerun()
+
+        else:  # register mode
+            st.header("📝 Create Account")
+            reg_username = st.text_input("Username", key="reg_username_input")
+            reg_password = st.text_input("Password", type="password", key="reg_password_input")
+            reg_confirm  = st.text_input("Confirm Password", type="password", key="reg_confirm_input")
+
+            if st.button("Create Account", type="primary", key="btn_register"):
+                if not reg_username.strip():
+                    st.error("❌ Username cannot be empty.")
+                elif not reg_password:
+                    st.error("❌ Password cannot be empty.")
+                elif reg_password != reg_confirm:
+                    st.error("❌ Passwords do not match.")
+                else:
+                    try:
+                        result = register_user(reg_username, reg_password)
+                        st.success(f"✅ Account created! Welcome, **{result['username']}**. Please log in.")
+                        st.session_state["auth_mode"] = "login"
+                        st.rerun()
+                    except ValueError as _e:
+                        st.error(f"❌ {_e}")
+                    except RuntimeError as _e:
+                        st.error(f"❌ Registration failed: {_e}")
+
+            st.write("Already have an account?")
+            if st.button("Back to Login", key="btn_go_login"):
+                st.session_state["auth_mode"] = "login"
+                st.rerun()
+
+    st.stop()  # Do not render the main app until authenticated
 
 
 def _pdf_hash(raw_bytes: bytes) -> str:
@@ -170,13 +277,25 @@ st.title("StoryWeave")
 st.subheader("Multimodal Generative AI for Adaptive and Inclusive Learning")
 
 with st.sidebar:
+    # ── User info & logout ─────────────────────────────────────────────────────
+    st.markdown(f"👤 **{st.session_state.get('username', '')}**")
+    if st.button("🚪 Logout", key="btn_logout"):
+        _logout()
+        st.rerun()
+    st.divider()
+
     st.header("⚙️ Settings")
     uploaded_file = st.file_uploader("Upload Educational PDF", type=["pdf"])
+    # Pre-populate level from persisted learner profile when available
+    _profile = load_profile(st.session_state["user_id"])
+    _profile_level = _profile.get("estimated_level", "Intermediate")
+    _level_options = ["Beginner", "Intermediate", "Advanced"]
+    _level_default_idx = _level_options.index(_profile_level) if _profile_level in _level_options else 1
     learning_level = st.selectbox(
-        "Select Learning Level", ["Beginner", "Intermediate", "Advanced"]
+        "Select Learning Level", _level_options, index=_level_default_idx
     )
 
-    # ── Auto-extract on upload (no Gemini) ───────────────────────────────────
+    # ── Auto-extract on upload (no AI call) ──────────────────────────────────
     # Extracts text locally using PyMuPDF and stores metadata in session state
     # so the PDF Preview tab is always populated immediately after upload.
     if uploaded_file is not None:
@@ -190,6 +309,8 @@ with st.sidebar:
                     if pdf_data and not pdf_data.get("error"):
                         st.session_state.pdf_text           = pdf_data.get("text", "")
                         st.session_state.pdf_hash           = current_file_hash
+                        # Stable document identifier = MD5 of raw PDF bytes
+                        st.session_state.pdf_doc_id         = current_file_hash
                         st.session_state.gen_level          = learning_level
                         st.session_state.pdf_preview_filename = uploaded_file.name
                         st.session_state.pdf_preview_pages  = pdf_data.get("page_count", 0)
@@ -201,12 +322,15 @@ with st.sidebar:
                         st.session_state.simplified         = None
                         st.session_state.comic              = None
                         st.session_state.quiz               = None
+                        st.session_state.quiz_saved         = False
+                        st.session_state.retest_saved       = False
                         st.session_state.all_quiz_questions = []
                         st.session_state.assistant_response = ""
                         st.session_state.assistant_audio_bytes = None
                         st.session_state.retest_quiz        = None
                     elif pdf_data and pdf_data.get("error"):
                         st.session_state.pdf_hash           = current_file_hash
+                        st.session_state.pdf_doc_id         = current_file_hash
                         st.session_state.pdf_preview_filename = uploaded_file.name
                         st.session_state.pdf_preview_pages  = pdf_data.get("page_count", 0)
                         st.session_state.pdf_preview_words  = 0
@@ -258,6 +382,7 @@ with st.sidebar:
             # Store new PDF context and reset all derived state
             st.session_state.pdf_text = pdf_text
             st.session_state.pdf_hash = current_hash
+            st.session_state.pdf_doc_id = current_hash  # stable doc identifier
             st.session_state.gen_level = learning_level
             st.session_state.analysis = None
             st.session_state.simplified = None
@@ -270,10 +395,12 @@ with st.sidebar:
             st.session_state.quiz_submitted = False
             st.session_state.user_answers = {}
             st.session_state.quiz_score = 0
+            st.session_state.quiz_saved = False
             st.session_state.retest_quiz = None
             st.session_state.retest_submitted = False
             st.session_state.retest_answers = {}
             st.session_state.retest_score = 0
+            st.session_state.retest_saved = False
             st.session_state.all_quiz_questions = []
 
             # ── Gemini Call 1: Analysis + Simplified Text ─────────────────────
@@ -388,8 +515,9 @@ with st.sidebar:
                     st.session_state.image_warning = unique_reasons[0]
 
 # ── Main tabs ─────────────────────────────────────────────────────────────────
-tab_pdf, tab0, tab1, tab2, tab3, tab4 = st.tabs(
-    ["📄 PDF Preview", "💬 Ask StoryWeave", "📋 Overview", "📖 Simplified Learning", "🎨 Comic Story", "❓ Quiz"]
+tab_pdf, tab0, tab1, tab2, tab3, tab4, tab_dash = st.tabs(
+    ["📄 PDF Preview", "💬 Ask StoryWeave", "📋 Overview", "📖 Simplified Learning",
+     "🎨 Comic Story", "❓ Quiz", "🎓 My Progress"]
 )
 
 # ── Tab: PDF Preview (local extraction — zero AI calls) ───────────────────
@@ -754,6 +882,11 @@ with tab4:
                         if st.session_state[answers_key].get(i) == q.get("correct_answer")
                     )
                     st.session_state[score_key] = score
+                    # Reset saved flag so new result gets persisted
+                    if is_retest:
+                        st.session_state.retest_saved = False
+                    else:
+                        st.session_state.quiz_saved = False
                     st.rerun()
 
         if st.session_state[submitted_key]:
@@ -761,6 +894,25 @@ with tab4:
             score = st.session_state[score_key]
             pct   = (score / total * 100) if total > 0 else 0
             st.success(f"### Score: {score} / {total}  ({pct:.0f}%)")
+
+            # ── Persist quiz result to DB (once per submission) ───────────────
+            _saved_key = "retest_saved" if is_retest else "quiz_saved"
+            if not st.session_state.get(_saved_key, False):
+                _doc_id = st.session_state.get("pdf_doc_id", st.session_state.get("pdf_hash", ""))
+                _uid    = st.session_state.get("user_id", "")
+                if _uid and _doc_id:
+                    try:
+                        save_quiz_result(
+                            user_id=_uid,
+                            doc_id=_doc_id,
+                            quiz_questions=questions,
+                            user_answers=st.session_state[answers_key],
+                            score=score,
+                            total=total,
+                        )
+                        st.session_state[_saved_key] = True
+                    except Exception as _save_err:
+                        st.warning(f"⚠️ Could not save quiz result: {_save_err}")
 
             st.subheader("Explanations")
             for i, q in enumerate(questions):
@@ -813,4 +965,77 @@ with tab4:
         st.info("Generate content to take the quiz.")
 
 
+# ── Tab: Learner Dashboard ────────────────────────────────────────────────────
+with tab_dash:
+    st.header("🎓 My Learning Progress")
+    _uid = st.session_state.get("user_id", "")
+    if not _uid:
+        st.info("Please log in to view your progress.")
+    else:
+        _doc_id = st.session_state.get("pdf_doc_id", "")
+        try:
+            dash = get_dashboard_data(_uid, doc_id=_doc_id if _doc_id else None)
+        except Exception as _dash_err:
+            st.error(f"❌ Could not load dashboard: {_dash_err}")
+            dash = {}
 
+        _prof = dash.get("profile", {})
+        st.subheader(f"Welcome, {st.session_state.get('username', '')}")
+
+        col_l, col_m, col_r = st.columns(3)
+        col_l.metric("Estimated Level",        _prof.get("estimated_level", "—"))
+        col_m.metric("Overall Mastery",         f"{_prof.get('overall_mastery', 0):.0f}%")
+        col_r.metric("Preferred Learning Format", _prof.get("preferred_modality", "—"))
+
+        _recent = dash.get("recent_score")
+        if _recent is not None:
+            st.metric("Most Recent Quiz", f"{_recent:.0f}%")
+
+        # Per-document progress
+        _all_docs = dash.get("all_doc_mastery", [])
+        if _all_docs:
+            st.subheader("📚 Chapter Progress")
+            for _doc_row in _all_docs:
+                st.markdown(f"- Document `{_doc_row['doc_id'][:12]}…` — **{_doc_row['avg_mastery']:.0f}%** average mastery")
+
+        # Current document concept detail
+        _doc_summary = dash.get("doc_summary")
+        if _doc_summary and _doc_id:
+            st.subheader("🔍 Current Chapter Concepts")
+            _weak   = _doc_summary.get("weak_concepts", [])
+            _strong = _doc_summary.get("strong_concepts", [])
+            _all_c  = _doc_summary.get("concepts", [])
+
+            if _weak:
+                st.markdown("**⚠️ Weak Concepts (need more practice):**")
+                for c in _weak:
+                    st.markdown(f"  - {c}")
+            if _strong:
+                st.markdown("**✅ Strong Concepts:**")
+                for c in _strong:
+                    st.markdown(f"  - {c}")
+            if _all_c:
+                st.subheader("📊 Concept Mastery Breakdown")
+                for row in _all_c:
+                    pct = row.get("mastery_score", 0)
+                    bar_color = "#e74c3c" if pct < 60 else ("#f39c12" if pct < 80 else "#27ae60")
+                    st.markdown(
+                        f"{row['concept']}: **{pct:.0f}%** "
+                        f"<span style='color:{bar_color}'>{'▓' * int(pct // 10)}{'░' * (10 - int(pct // 10))}</span>",
+                        unsafe_allow_html=True,
+                    )
+
+        # Quiz history for current doc
+        _quiz_hist = dash.get("quiz_history", [])
+        if _quiz_hist:
+            st.subheader("📝 Quiz History (This Chapter)")
+            for attempt_num, attempt in enumerate(_quiz_hist, start=1):
+                _pct = (attempt["score"] / attempt["total_questions"] * 100
+                        if attempt["total_questions"] > 0 else 0)
+                st.markdown(
+                    f"Attempt {attempt_num}: **{attempt['score']} / {attempt['total_questions']}** "
+                    f"({_pct:.0f}%) — {attempt['timestamp'][:19]}"
+                )
+
+        if not _doc_id:
+            st.info("📄 Upload and generate content from a PDF to see chapter-specific progress here.")
