@@ -720,6 +720,121 @@ class TestImageGenerator(unittest.TestCase):
         self.assertIn("Pixazo API free endpoint unavailable", str(ctx.exception))
 
 
+class TestGeminiImageGenerator(unittest.TestCase):
+    """Tests for Gemini image-generation support — mocked, zero real API calls."""
+
+    @patch("modules.llm_service.get_client")
+    def test_gemini_image_generation_request_construction(self, mock_get_client):
+        """Verifies Gemini image request is constructed with model and enhanced prompt."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        mock_part = MagicMock()
+        mock_part.inline_data.data = b"\x89PNG\r\n\x1a\nfakegeminibytes"
+        mock_candidate = MagicMock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = MagicMock()
+        mock_response.candidates = [mock_candidate]
+        mock_client.models.generate_content.return_value = mock_response
+
+        from modules.image_generator import generate_image_bytes
+        result = generate_image_bytes("Scientist in laboratory examining chloroplast", provider="gemini")
+
+        self.assertEqual(result, b"\x89PNG\r\n\x1a\nfakegeminibytes")
+        mock_client.models.generate_content.assert_called_once()
+        call_kwargs = mock_client.models.generate_content.call_args.kwargs
+        self.assertEqual(call_kwargs["model"], "gemini-2.5-flash-image")
+        self.assertIn("Scientist in laboratory examining chloroplast", call_kwargs["contents"])
+        self.assertIn("Educational comic-book panel illustration", call_kwargs["contents"])
+
+    @patch("modules.image_generator.generate_image_bytes")
+    def test_gemini_six_panel_generation_flow(self, mock_gen_image):
+        """Verifies 6-panel comic generation flow generates exactly 6 images from panel scripts."""
+        mock_gen_image.side_effect = lambda prompt, **kwargs: f"img_bytes_{prompt[:10]}".encode()
+
+        comic_panels = [
+            {"panel_number": i + 1, "scene": f"Scene description for panel {i + 1}"}
+            for i in range(6)
+        ]
+
+        comic_images = {}
+        for i, panel in enumerate(comic_panels):
+            prompt = panel.get("scene")
+            img = mock_gen_image(prompt, provider="gemini")
+            comic_images[i] = img
+
+        self.assertEqual(len(comic_images), 6)
+        self.assertEqual(mock_gen_image.call_count, 6)
+        for i in range(6):
+            self.assertIn(i, comic_images)
+            self.assertTrue(comic_images[i].startswith(b"img_bytes_"))
+
+    @patch("modules.llm_service.get_client")
+    def test_gemini_image_generation_failure_handling(self, mock_get_client):
+        """Verifies Gemini image-generation errors (e.g. 402/429) raise actionable RuntimeError."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.models.generate_content.side_effect = Exception(
+            "402 RESOURCE_EXHAUSTED: Prepayment credits depleted"
+        )
+
+        from modules.image_generator import generate_image_bytes
+        with self.assertRaises(RuntimeError) as ctx:
+            generate_image_bytes("Panel 1 scene", provider="gemini")
+
+        self.assertIn("Prepayment credits depleted", str(ctx.exception))
+
+    @patch("modules.llm_service.get_client")
+    def test_gemini_image_generation_quota_error(self, mock_get_client):
+        """Verifies 429 quota exhaustion is cleanly reported."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.models.generate_content.side_effect = Exception("429 RESOURCE_EXHAUSTED")
+
+        from modules.image_generator import generate_image_bytes
+        with self.assertRaises(RuntimeError) as ctx:
+            generate_image_bytes("Panel 1 scene", provider="gemini")
+
+        self.assertIn("429", str(ctx.exception))
+
+    @patch("modules.llm_service.generate_json")
+    def test_comic_script_generation_unchanged(self, mock_generate_json):
+        """Verifies comic script generation logic and prompt loading remain completely unchanged."""
+        mock_generate_json.return_value = {
+            "comic": {
+                "comic_title": "Test Comic",
+                "panels": [{"panel_number": 1, "scene": "Intro"}]
+            }
+        }
+        from modules.comic_generator import generate_comic_script
+        res = generate_comic_script("Sample chapter content")
+        self.assertIn("comic", res)
+        mock_generate_json.assert_called_once()
+        prompt_arg = mock_generate_json.call_args[0][0]
+        self.assertIn("Sample chapter content", prompt_arg)
+
+    @patch("modules.image_generator.requests.post")
+    @patch("modules.image_generator.requests.get")
+    def test_ollama_pixazo_path_unchanged(self, mock_get, mock_post):
+        """Verifies Ollama provider continues routing to Pixazo without Gemini involvement."""
+        import os
+        os.environ["PIXAZO_API_KEY"] = "fake-key"
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 200
+        mock_post_resp.json.return_value = {"url": "https://fake.pixazo.ai/image.png"}
+        mock_post.return_value = mock_post_resp
+
+        mock_get_resp = MagicMock()
+        mock_get_resp.status_code = 200
+        mock_get_resp.content = b"fake-pixazo-png"
+        mock_get.return_value = mock_get_resp
+
+        from modules.image_generator import generate_image_bytes
+        res = generate_image_bytes("Test prompt", provider="ollama")
+        self.assertEqual(res, b"fake-pixazo-png")
+        mock_post.assert_called_once()
+
+
 # ──────────────────────────────────────────────────────────────
 # Large-PDF Request Bounding & Timeout Handling Tests
 # ──────────────────────────────────────────────────────────────

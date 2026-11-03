@@ -21,6 +21,7 @@ OLLAMA_CHUNK_CHAR_LIMIT = int(os.getenv("OLLAMA_CHUNK_CHAR_LIMIT", "5000"))
 # ── Gemini Configuration ──────────────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MODEL_NAME = "gemini-3.8-flash"
+GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 
 # ── Thinking Configuration ────────────────────────────────────────────────────
 # Gemini 3.8 Flash supports reasoning/thinking configuration (LOW, MEDIUM, HIGH).
