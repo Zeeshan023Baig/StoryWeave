@@ -676,6 +676,7 @@ class TestCachingLogic(unittest.TestCase):
 class TestImageGenerator(unittest.TestCase):
     """Tests for modules.image_generator — no real network calls."""
 
+    @patch("config.settings.IMAGE_PROVIDER", "pixazo")
     @patch("modules.image_generator.requests.get")
     @patch("modules.image_generator.requests.post")
     def test_generate_image_bytes_success(self, mock_post, mock_get):
@@ -703,6 +704,7 @@ class TestImageGenerator(unittest.TestCase):
         mock_post.assert_called_once()
         mock_get.assert_called_once_with("https://fake.pixazo.ai/image.png")
 
+    @patch("config.settings.IMAGE_PROVIDER", "pixazo")
     @patch("modules.image_generator.requests.post")
     def test_generate_image_bytes_404_error(self, mock_post):
         """Verifies 404 errors are caught and re-raised cleanly."""
@@ -743,7 +745,8 @@ class TestGeminiImageGenerator(unittest.TestCase):
         self.assertEqual(result, b"\x89PNG\r\n\x1a\nfakegeminibytes")
         mock_client.models.generate_content.assert_called_once()
         call_kwargs = mock_client.models.generate_content.call_args.kwargs
-        self.assertEqual(call_kwargs["model"], "gemini-2.5-flash-image")
+        from config.settings import GEMINI_IMAGE_MODEL
+        self.assertEqual(call_kwargs["model"], GEMINI_IMAGE_MODEL)
         self.assertIn("Scientist in laboratory examining chloroplast", call_kwargs["contents"])
         self.assertIn("Educational comic-book panel illustration", call_kwargs["contents"])
 

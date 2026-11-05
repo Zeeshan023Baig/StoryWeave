@@ -1,9 +1,12 @@
 import os
 import requests
 import time
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Explicitly load .env from StoryWeave project root regardless of cwd
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=_ENV_PATH, override=True)
 
 _PIXAZO_URL = "https://gateway.pixazo.ai/flux/text-to-image"
 _STATUS_URL_TEMPLATE = "https://gateway.pixazo.ai/v2/requests/status/{request_id}"
@@ -160,13 +163,46 @@ def _generate_image_gemini(prompt: str) -> bytes:
         raise RuntimeError(f"Gemini image generation failed: {err_str}") from exc
 
 
+def get_image_provider(provider_override: str | None = None) -> str:
+    """
+    Resolve active image provider ('gemini' | 'pixazo').
+
+    Resolution order:
+      1. Explicit provider_override argument (if passed; 'ollama' maps to 'pixazo')
+      2. Module-level IMAGE_PROVIDER (supports unittest.mock.patch("modules.image_generator.IMAGE_PROVIDER", ...))
+      3. config.settings.IMAGE_PROVIDER (supports config-level patch or environment switch)
+      4. Fallback based on text provider: 'gemini' if AI_PROVIDER == 'gemini' else 'pixazo'
+    """
+    if provider_override:
+        p = str(provider_override).lower().strip()
+        return "pixazo" if p == "ollama" else p
+
+    mod_val = globals().get("IMAGE_PROVIDER")
+    try:
+        import config.settings as _settings
+        cfg_val = getattr(_settings, "IMAGE_PROVIDER", None)
+    except Exception:
+        cfg_val = None
+
+    if mod_val is not None and str(mod_val).strip():
+        val = str(mod_val).lower().strip()
+        return "pixazo" if val == "ollama" else val
+
+    if cfg_val is not None and str(cfg_val).strip():
+        val = str(cfg_val).lower().strip()
+        return "pixazo" if val == "ollama" else val
+
+    from modules.llm_service import _get_active_provider
+    return "gemini" if _get_active_provider() == "gemini" else "pixazo"
+
+
 def generate_image_bytes(prompt: str, provider: str | None = None) -> bytes:
     """
     Public entry point for image generation.
-    Routes to Gemini when provider is 'gemini', otherwise uses Pixazo.
+    Routes to Gemini when active provider is 'gemini', otherwise uses Pixazo.
+    Never silently falls back from Gemini to Pixazo.
     """
-    from modules.llm_service import _get_active_provider
-    active = _get_active_provider(provider)
+    active = get_image_provider(provider)
 
     if active == "gemini":
         return _generate_image_gemini(prompt)

@@ -1,7 +1,10 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Explicitly load .env from StoryWeave project root regardless of cwd
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=_ENV_PATH, override=True)
 
 # ── AI Provider Selection ─────────────────────────────────────────────────────
 # Set AI_PROVIDER to "ollama" to route all LLM calls to the local Ollama server.
@@ -21,7 +24,13 @@ OLLAMA_CHUNK_CHAR_LIMIT = int(os.getenv("OLLAMA_CHUNK_CHAR_LIMIT", "5000"))
 # ── Gemini Configuration ──────────────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MODEL_NAME = "gemini-3.8-flash"
-GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
+GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
+
+# ── Image Provider Selection (independent of AI_PROVIDER) ─────────────────────
+# "gemini" → Gemini native image generation; "pixazo" → Pixazo Flux API.
+# If unset, falls back to legacy behaviour: Gemini when AI_PROVIDER=gemini,
+# otherwise Pixazo.
+IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "").strip().lower()
 
 # ── Thinking Configuration ────────────────────────────────────────────────────
 # Gemini 3.8 Flash supports reasoning/thinking configuration (LOW, MEDIUM, HIGH).

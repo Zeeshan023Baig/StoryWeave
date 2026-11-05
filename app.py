@@ -1,3 +1,10 @@
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Ensure StoryWeave/.env is loaded even if launched from a parent directory
+_ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=_ENV_PATH, override=True)
+
 import base64
 import hashlib
 import streamlit as st
